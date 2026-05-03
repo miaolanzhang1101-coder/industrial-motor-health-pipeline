@@ -1,0 +1,32 @@
+{
+  "image": "ghcr.io/psam-5005-2026s-a/5005-utils:ds",
+  "hostRequirements": {
+    "cpus": 2
+  },
+  "waitFor": "onCreateCommand",
+  "postCreateCommand": "python3 -m pip install plotly[express] seaborn",
+  "customizations": {
+    "codespaces": { "openFiles": [] },
+    "vscode": {
+      "settings": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 2,
+        "editor.detectIndentation": false,
+        "extensions.autoCheckUpdates": false,
+        "extensions.autoUpdate": false,
+        "chat.disableAIFeatures": true,
+        "chat.editor.delegateToAgent.enabled": false,
+        "interactive.input.delegateToAgent": false,
+        "githubPullRequests.codingAgent.codeLens": false,
+        "chat.agent.enabled": false,
+        "telemetry.enableTelemetry": false,
+        "telemetry.feedback.enabled": false,
+        "telemetry.telemetryLevel": "off"
+      },
+      "extensions": [
+        "ms-toolsai.jupyter@2025.7.0",
+        "ms-python.python"
+      ]
+    }
+  }
+}

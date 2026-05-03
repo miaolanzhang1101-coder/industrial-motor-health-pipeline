@@ -1,0 +1,12 @@
+.DS_S*
+__pycache__/
+runs/
+lfw/
+*_utils.py
+*_utils.py.*
+*.py.*
+*.pyc
+*.pyc.*
+yolo*.pt
+data/archivet.zip
+data/
