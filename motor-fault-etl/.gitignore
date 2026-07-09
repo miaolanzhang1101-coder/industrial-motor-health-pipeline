@@ -1,0 +1,16 @@
+# Data files
+data/raw/*.mat
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+# Mac
+.DS_Store
+
+# Virtual environment
+venv/
+.venv/
