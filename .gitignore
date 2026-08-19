@@ -10,3 +10,6 @@ lfw/
 yolo*.pt
 data/archivet.zip
 data/
+
+# Local backups
+*.bak

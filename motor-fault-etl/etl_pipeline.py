@@ -1,24 +1,12 @@
 """
-Motor Fault Detection — End-to-End ETL Pipeline
-=================================================
+Motor Fault Detection ETL Pipeline
 
-Extract  : read raw vibration signals from CWRU-style .mat files
-Transform: segment signals into fixed-size windows, extract time/frequency-domain features
-Load     : write a dimension row per source file and a fact row per window into Postgres
+Extracts vibration signals from CWRU-style MATLAB files,
+transforms them into fixed-size windows and statistical/
+frequency-domain features, and loads the results into PostgreSQL.
 
-Design notes (for interview talking points):
-- Idempotent: re-running on the same file is a no-op if it's already loaded successfully.
-  This matters because a real pipeline gets re-triggered (retries, backfills, scheduler
-  restarts) and should never silently duplicate data.
-- Batched writes: features are buffered and inserted in batches rather than row-by-row,
-  since row-by-row inserts are the most common beginner mistake that kills pipeline
-  throughput at any real scale.
-- Failure isolation: one malformed file should not take down the whole run. Each file's
-  outcome (loaded / failed / reason) is recorded in `source_files`, not just printed to
-  stdout — that's the difference between a script and a pipeline you can operate.
-
-Usage:
-    python etl_pipeline.py --data-dir data/raw --db-url postgresql://user:pass@localhost:5432/motors
+The pipeline supports incremental processing, batch inserts,
+and per-file load status tracking.
 """
 
 import argparse
@@ -63,10 +51,14 @@ def load_signal(filepath: Path):
 
 def get_label(filepath: Path) -> str:
     name = filepath.stem.upper()
+
     if name.startswith("NORMAL") or name.isdigit():
         return "normal"
-    elif any(x in name for x in ["IR", "OR", "B", "BALL"]):
+
+    fault_patterns = ("IR", "OR", "BALL", "INNER", "OUTER")
+    if any(pattern in name for pattern in fault_patterns):
         return "fault"
+
     return "normal"
 
 
@@ -130,38 +122,78 @@ def already_loaded(engine, filename: str) -> bool:
     return result is not None
 
 
-def upsert_source_file(engine, filename: str, machine_condition: str,
-                        sampling_rate: int, n_windows: int, n_skipped: int,
-                        status: str, error: str | None = None) -> int:
-    """Insert or update the dimension row for a file; returns file_id."""
+def upsert_source_file(
+    engine,
+    filename: str,
+    machine_condition: str,
+    sampling_rate: int,
+    n_windows: int,
+    n_skipped: int,
+    status: str,
+    error: str | None = None,
+) -> int:
+    """Insert or update source-file metadata and load status."""
+
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO source_files
-                    (filename, machine_condition, sampling_rate_hz, n_windows, n_skipped,
-                     load_status, load_error, loaded_at)
-                VALUES
-                    (:filename, :condition, :rate, :n_windows, :n_skipped, :status, :error, now())
+                INSERT INTO source_files (
+                    filename,
+                    machine_condition,
+                    sampling_rate_hz,
+                    n_windows,
+                    n_skipped,
+                    load_status,
+                    load_error,
+                    loaded_at
+                )
+                VALUES (
+                    :filename,
+                    :condition,
+                    :rate,
+                    :n_windows,
+                    :n_skipped,
+                    :status,
+                    :error,
+                    CASE
+                        WHEN :status = 'loaded' THEN now()
+                        ELSE NULL
+                    END
+                )
                 ON CONFLICT (filename) DO UPDATE SET
                     machine_condition = EXCLUDED.machine_condition,
-                    sampling_rate_hz  = EXCLUDED.sampling_rate_hz,
-                    n_windows         = EXCLUDED.n_windows,
-                    n_skipped         = EXCLUDED.n_skipped,
-                    load_status       = EXCLUDED.load_status,
-                    load_error        = EXCLUDED.load_error,
-                    loaded_at         = now()
+                    sampling_rate_hz = EXCLUDED.sampling_rate_hz,
+                    n_windows = EXCLUDED.n_windows,
+                    n_skipped = EXCLUDED.n_skipped,
+                    load_status = EXCLUDED.load_status,
+                    load_error = EXCLUDED.load_error,
+                    loaded_at = CASE
+                        WHEN EXCLUDED.load_status = 'loaded'
+                        THEN now()
+                        ELSE source_files.loaded_at
+                    END
             """),
             {
-                "filename": filename, "condition": machine_condition, "rate": sampling_rate,
-                "n_windows": n_windows, "n_skipped": n_skipped, "status": status, "error": error,
+                "filename": filename,
+                "condition": machine_condition,
+                "rate": sampling_rate,
+                "n_windows": n_windows,
+                "n_skipped": n_skipped,
+                "status": status,
+                "error": error,
             },
         )
+
         file_id = conn.execute(
-            text("SELECT file_id FROM source_files WHERE filename = :fn"),
+            text(
+                "SELECT file_id "
+                "FROM source_files "
+                "WHERE filename = :fn"
+            ),
             {"fn": filename},
         ).scalar_one()
-    return file_id
 
+    return file_id
 
 def load_windows(engine, file_id: int, rows: list[dict]):
     """Batch-insert feature rows for one file. Clears any prior windows for that
